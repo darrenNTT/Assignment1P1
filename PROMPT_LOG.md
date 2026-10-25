@@ -113,3 +113,54 @@ No Python source files were modified; only `ARCHITECTURE.md` was edited to
 fix the documentation error.
 
 ---
+
+## Entry 3 — 2026-10-26
+
+### Prompt
+
+```
+add docstrings and type hints to all public functions in the python files, explaining what each function does, its parameters and return values. dont change any existing logic or fix bugs yet, only add documentation and type annotations. show me the proposed changes first so i can review them before applying. also update PROMPT_LOG.md with this prompt and a summary of what was suggested.
+```
+
+### Summary of what was suggested and applied
+
+The assistant proposed adding Google-style docstrings (Purpose / Args /
+Returns / Raises) and PEP 484 type hints to every **public** function in
+the codebase — i.e. all functions without a leading underscore. The
+private helper `_monthly_rate()` in `loan_calc/calculator.py` was
+explicitly excluded, since it is an internal implementation detail (the
+user correctly flagged this when the assistant initially mis-scoped the
+proposal to include it).
+
+Each function's proposed signature and docstring was presented one at a
+time in chat for individual review and approval, per the user's explicit
+instruction not to write a separate summary file and not to apply changes
+until each one was approved. After approval, each change was written
+directly into the corresponding `.py` file using targeted edits — no
+function logic, control flow, or behavior was altered in any way.
+
+**`loan_calc/calculator.py`** — added `from typing import List, Dict,
+Optional` and docstrings/type hints to:
+- `emi()`
+- `total_payment()`
+- `total_interest()`
+- `amortisation_schedule()`
+- `outstanding_after()`
+- `remaining_tenure()`
+- `prepayment_savings()` (expanded its existing one-line docstring into a
+  full Args/Returns docstring, preserving the original summary line)
+- `compare_offers()`
+- `eligible_amount()`
+- `format_inr()`
+- `schedule_to_csv()`
+- `summary()` (docstring explicitly notes the `date.today()` default
+  behavior flagged as impure in Entry 2)
+
+**`cli.py`** — added a docstring and `-> None` return type hint to:
+- `main()`
+
+After all changes were applied, the CLI was re-run (`python cli.py 500000
+9 240`) to confirm it still produces correct output, verifying that no
+logic was broken by the documentation/type-hint additions.
+
+---

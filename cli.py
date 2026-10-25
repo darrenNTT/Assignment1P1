@@ -4,7 +4,20 @@ import json
 from loan_calc import amortisation_schedule, prepayment_savings, summary
 
 
-def main():
+def main() -> None:
+    """
+    CLI entry point for the loan calculator.
+
+    Parses command-line arguments (principal, rate, tenure, and optional
+    --schedule, --prepay-month, --prepay-amount flags), then prints:
+      - A loan summary (always, as indented JSON).
+      - The amortisation schedule (if --schedule is passed), one row per line.
+      - Prepayment savings (if both --prepay-month and --prepay-amount are
+        passed), as indented JSON.
+
+    Returns:
+        None. All output is printed to stdout.
+    """
     ap = argparse.ArgumentParser(description="Loan calculator")
     ap.add_argument("principal", type=float)
     ap.add_argument("rate", type=float, help="annual interest rate in %")
