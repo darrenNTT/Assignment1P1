@@ -1,5 +1,6 @@
 import math
 from datetime import date
+from typing import List, Dict, Optional
 
 
 DEFAULT_CURRENCY = "INR"
@@ -10,7 +11,25 @@ def _monthly_rate(annual_rate):
     return r
 
 
-def emi(principal, annual_rate, tenure_months):
+def emi(principal: float, annual_rate: float, tenure_months: int) -> float:
+    """
+    Calculate the Equated Monthly Instalment (EMI) for a loan.
+
+    Uses the standard amortising-loan formula. Returns principal divided
+    evenly across the tenure if the computed monthly interest rate is zero.
+
+    Args:
+        principal: Loan principal amount. Must be greater than 0.
+        annual_rate: Annual interest rate as a percentage (e.g. 9 for 9%).
+        tenure_months: Loan tenure in months. Must be greater than 0.
+
+    Returns:
+        The EMI amount, rounded to 2 decimal places.
+
+    Raises:
+        ValueError: If tenure_months is not positive.
+        ValueError: If principal is not positive.
+    """
     if tenure_months <= 0:
         raise ValueError("tenure must be positive")
     if principal <= 0:
