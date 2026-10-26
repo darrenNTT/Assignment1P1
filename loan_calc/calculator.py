@@ -158,7 +158,7 @@ def remaining_tenure(balance: float, annual_rate: float, instalment: float) -> i
             interest portion of the balance (i.e. the loan could never be
             repaid).
     """
-    r = annual_rate / 100
+    r = annual_rate / 1200
     if balance <= 0:
         return 0
     if r == 0:

@@ -457,3 +457,96 @@ No git commit was made — the user will handle committing this fix
 separately.
 
 ---
+
+## Entry 7 — 2026-10-26
+
+### Prompt
+
+```
+now that Bug #1 is fixed and tested, let's move on to Bug #2 in remaining_tenure().
+
+review the incorrect interest rate calculation and propose the smallest possible fix so the function uses the correct monthly interest rate instead of the annual rate.
+
+show me the exact code change and explain why it fixes the issue before applying anything.
+
+dont modify any code or tests yet, and dont touch Bug #3. once i approve the fix, we'll apply it, rerun the full pytest suite and make a separate git commit.
+
+also update PROMPT_LOG.md with this prompt and a summary of the proposed fix.
+```
+
+### Proposed fix (awaiting approval)
+
+**File:** `loan_calc/calculator.py`, inside `remaining_tenure()`.
+
+**Before:**
+```python
+    r = annual_rate / 100
+```
+
+**After:**
+```python
+    r = annual_rate / 1200
+```
+
+**Why this fixes the bug:** `remaining_tenure()` currently computes
+`r = annual_rate / 100`, which converts the annual rate percentage into
+an annual *decimal* rate (e.g. 9% → `0.09`). But every formula in this
+function treats `r` as a *monthly* rate — it's multiplied by a monthly
+`balance` and used as the per-period rate in the standard loan-tenure
+logarithmic formula (`n = -log(1 - balance*r/instalment) / log(1+r)`),
+the same formula structure used by `_monthly_rate()` elsewhere in the
+module (which correctly divides by `1200`, i.e. `100 * 12`, to get the
+monthly decimal rate). Using `annual_rate / 100` makes `r` twelve times
+too large, so the `balance * r` interest check incorrectly rejects
+valid instalments (tripping `ValueError("instalment too small to repay
+the loan")`) and would produce wildly incorrect tenure results if it
+didn't raise first. Changing the divisor from `100` to `1200` aligns
+`remaining_tenure()` with the monthly-rate convention used everywhere
+else in `calculator.py` (`_monthly_rate()`), fixing the root cause
+without touching any other line, branch, or formula in the function.
+
+This is the minimal possible fix — a single-token change (`100` →
+`1200`) — and does not touch Bug #3 (`_monthly_rate()`'s 4-decimal
+rounding) or any other function.
+
+No code has been changed yet; this fix is pending your approval.
+
+---
+
+### Approval and follow-up prompt
+
+```
+approved, apply the proposed one-line fix to remaining_tenure().
+
+after applying it, rerun the full pytest suite and show me the results, including which previously failing tests now pass and which failures remain.
+
+dont modify any other calculator functions, CLI logic or tests, and dont fix Bug #3 yet.
+
+update PROMPT_LOG.md with this approval, the exact code change and the actual pytest results. dont create a git commit yet, i'll handle that separately.
+```
+
+### Fix applied and pytest re-run
+
+The one-line fix was applied to `loan_calc/calculator.py`: `r =
+annual_rate / 100` changed to `r = annual_rate / 1200` inside
+`remaining_tenure()`. No other lines changed. `python -m pytest tests/
+-v --no-header` was re-run against the full suite.
+
+**Result: 61 tests collected, 60 passed, 1 failed, in 0.39s** (up from
+57 passed / 4 failed after the Bug 1 fix in Entry 6).
+
+**Tests that now PASS (previously failing, Bug 2 — confirmed fixed):**
+- `TestRemainingTenure::test_remaining_tenure_normal_case`
+- `TestPrepaymentSavings::test_prepayment_savings_normal_case`
+- `TestMainPrepaymentArgs::test_main_with_prepayment_prints_savings_json`
+
+**Test that still FAILS (unrelated to Bug 2 — Bug 3, untouched as
+instructed):**
+- `TestEmi::test_emi_monthly_rate_rounding_with_9_5_percent` (Bug 3 —
+  `_monthly_rate()`'s 4-decimal rounding causing EMI drift at 9.5%)
+
+No other calculator functions, CLI logic, or test files were modified.
+No git commit was made — the user will handle committing this fix
+separately.
+
+---
