@@ -2,8 +2,43 @@ import math
 from datetime import date
 from typing import List, Dict, Optional
 
+from .exceptions import (
+    InvalidPrincipalError,
+    InvalidRateError,
+    InvalidTenureError,
+    InvalidInstalmentError,
+    InvalidPrepaymentError,
+    InvalidIncomeError,
+)
+
 
 DEFAULT_CURRENCY = "INR"
+
+
+def _is_number(value) -> bool:
+    """Return True if value is an int or float, excluding bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value) -> bool:
+    """Return True if value is a number and not NaN or +/-infinity."""
+    return _is_number(value) and not math.isnan(value) and not math.isinf(value)
+
+
+def _is_strict_int(value) -> bool:
+    """
+    Return True if value is a strict int (not bool, and not a float,
+    even a whole-number float like 12.0).
+
+    Whole-number floats are intentionally rejected: tenure/month-count
+    parameters validated with this check are later used in contexts
+    requiring a true int (e.g. range(), list indexing), where a float
+    (even 12.0) raises a TypeError. Rejecting floats here keeps
+    validation consistent with actual usage.
+    """
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int)
 
 
 def _monthly_rate(annual_rate):
@@ -27,13 +62,16 @@ def emi(principal: float, annual_rate: float, tenure_months: int) -> float:
         The EMI amount, rounded to 2 decimal places.
 
     Raises:
-        ValueError: If tenure_months is not positive.
-        ValueError: If principal is not positive.
+        InvalidPrincipalError: If principal is not a finite positive number.
+        InvalidRateError: If annual_rate is not a finite non-negative number.
+        InvalidTenureError: If tenure_months is not a positive integer.
     """
-    if tenure_months <= 0:
-        raise ValueError("tenure must be positive")
-    if principal <= 0:
-        raise ValueError("principal must be positive")
+    if not _is_finite_number(principal) or principal <= 0:
+        raise InvalidPrincipalError("principal must be a finite positive number")
+    if not _is_finite_number(annual_rate) or annual_rate < 0:
+        raise InvalidRateError("annual_rate must be a finite non-negative number")
+    if not _is_strict_int(tenure_months) or tenure_months <= 0:
+        raise InvalidTenureError("tenure_months must be a positive integer")
     r = _monthly_rate(annual_rate)
     if r == 0:
         return round(principal / tenure_months, 2)
@@ -131,7 +169,12 @@ def outstanding_after(principal: float, annual_rate: float, tenure_months: int, 
         The outstanding balance as a float. Returns the original principal
         (rounded) if months_paid is 0 or negative, and 0.0 if months_paid
         exceeds the number of scheduled payments.
+
+    Raises:
+        InvalidTenureError: If months_paid is not an integer.
     """
+    if not _is_strict_int(months_paid):
+        raise InvalidTenureError("months_paid must be an integer")
     if months_paid <= 0:
         return round(principal, 2)
     sched = amortisation_schedule(principal, annual_rate, tenure_months)
@@ -154,19 +197,40 @@ def remaining_tenure(balance: float, annual_rate: float, instalment: float) -> i
         0 if the balance is already zero or negative.
 
     Raises:
-        ValueError: If the instalment is too small to ever cover the
-            interest portion of the balance (i.e. the loan could never be
-            repaid).
+        InvalidInstalmentError: If instalment is not a finite positive
+            number, or is too small to ever cover the interest portion
+            of the balance (i.e. the loan could never be repaid).
+        InvalidRateError: If annual_rate is not a finite non-negative
+            number.
+
+    Note:
+        A negative or zero balance is NOT an error — it is intentional,
+        existing behavior meaning the loan is already fully repaid (or
+        overpaid), so 0 months remain. Only balance's *type* is
+        validated; its sign is not.
     """
+    if not _is_finite_number(balance):
+        raise InvalidInstalmentError("balance must be a finite number")
+    if not _is_finite_number(annual_rate) or annual_rate < 0:
+        raise InvalidRateError("annual_rate must be a finite non-negative number")
+    if not _is_finite_number(instalment) or instalment <= 0:
+        raise InvalidInstalmentError("instalment must be a finite positive number")
     r = annual_rate / 1200
     if balance <= 0:
         return 0
     if r == 0:
         return math.ceil(balance / instalment)
     if instalment <= balance * r:
-        raise ValueError("instalment too small to repay the loan")
+        raise InvalidInstalmentError("instalment too small to repay the loan")
     n = -math.log(1 - balance * r / instalment) / math.log(1 + r)
-    return math.ceil(n)
+    # Round to remove floating-point noise (e.g. 18.000047907513988
+    # instead of exactly 18.0) before taking the ceiling, so values that
+    # are mathematically whole numbers are not incorrectly rounded up to
+    # the next integer due to tiny precision errors in the log-based
+    # formula. 4 decimal places is enough to absorb the observed noise
+    # (which is usually << 1e-4) while still preserving genuinely
+    # fractional results (e.g. 5.0001 still correctly ceils to 6).
+    return math.ceil(round(n, 4))
 
 
 def prepayment_savings(
@@ -199,7 +263,23 @@ def prepayment_savings(
             interest_saved (float): Interest saved, rounded to 2 decimal places.
             interest_paid_before_prepayment (float): Interest paid up to
                 prepay_month, rounded to 2 decimal places.
+
+    Raises:
+        InvalidPrepaymentError: If prepay_month is not an integer within
+            [1, tenure_months], or if prepay_amount is not a finite
+            non-negative number.
+
+    Note:
+        A prepay_amount that exceeds the outstanding balance at
+        prepay_month is NOT an error — it is intentional, existing
+        behavior meaning the loan is fully paid off at that point.
     """
+    if not _is_strict_int(prepay_month) or prepay_month < 1 or prepay_month > tenure_months:
+        raise InvalidPrepaymentError(
+            "prepay_month must be an integer between 1 and tenure_months"
+        )
+    if not _is_finite_number(prepay_amount) or prepay_amount < 0:
+        raise InvalidPrepaymentError("prepay_amount must be a finite non-negative number")
     instalment = emi(principal, annual_rate, tenure_months)
     sched = amortisation_schedule(principal, annual_rate, tenure_months)
     balance = sched[prepay_month - 1]["balance"]
@@ -211,7 +291,15 @@ def prepayment_savings(
     original_left = tenure_months - prepay_month
     interest_paid_so_far = sum(row["interest"] for row in sched[:prepay_month])
     original_interest = total_interest(principal, annual_rate, tenure_months)
-    new_total = instalment * prepay_month + prepay_amount + instalment * months_left
+    # Cap the amount used in the financial calculation to the actual
+    # outstanding balance: any portion of prepay_amount exceeding the
+    # balance is not actually "spent" on the loan (there is nothing left
+    # to prepay), so including it in new_total would overstate the total
+    # amount paid and produce a nonsensical, deeply negative
+    # interest_saved. The loan is simply fully repaid at prepay_month in
+    # that case.
+    effective_prepay_amount = min(prepay_amount, balance)
+    new_total = instalment * prepay_month + effective_prepay_amount + instalment * months_left
     new_interest = new_total - principal
     return {
         "emi": instalment,
@@ -277,7 +365,25 @@ def eligible_amount(
     Returns:
         The maximum eligible principal, rounded to 2 decimal places.
         Returns 0.0 if the borrower has no available income capacity.
+
+    Raises:
+        InvalidIncomeError: If monthly_income is not a finite positive
+            number, existing_emis is not a finite non-negative number,
+            or foir is not a finite number within (0, 1].
+        InvalidRateError: If annual_rate is not a finite non-negative
+            number.
+        InvalidTenureError: If tenure_months is not a positive integer.
     """
+    if not _is_finite_number(monthly_income) or monthly_income <= 0:
+        raise InvalidIncomeError("monthly_income must be a finite positive number")
+    if not _is_finite_number(existing_emis) or existing_emis < 0:
+        raise InvalidIncomeError("existing_emis must be a finite non-negative number")
+    if not _is_finite_number(foir) or foir <= 0 or foir > 1:
+        raise InvalidIncomeError("foir must be a finite number within (0, 1]")
+    if not _is_finite_number(annual_rate) or annual_rate < 0:
+        raise InvalidRateError("annual_rate must be a finite non-negative number")
+    if not _is_strict_int(tenure_months) or tenure_months <= 0:
+        raise InvalidTenureError("tenure_months must be a positive integer")
     available = monthly_income * foir - existing_emis
     if available <= 0:
         return 0.0

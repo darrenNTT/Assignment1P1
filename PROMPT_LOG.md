@@ -315,6 +315,226 @@ No remaining failures. No other calculator functions, CLI logic, or test files w
 
 ---
 
+# STRETCH GOAL PROMPTS
+
+The entries below cover the optional stretch goal: "Add input validation and a custom exception hierarchy, then add tests for it." This work is separate from the mandatory P1 requirements (Entries 1-9 above).
+
+## Stretch Entry 1 — 2026-10-26
+
+### Prompt
+
+```
+We have completed all mandatory requirements for Assignment P1, with 61 passing tests and 99% line coverage.
+
+We now want to implement the optional stretch goal: "Add input validation and a custom exception hierarchy, then add tests for it."
+
+First, inspect the existing loan calculator code and propose:
+
+1. Which public functions require input validation.
+2. Which invalid inputs should be rejected.
+3. A simple custom exception hierarchy, with a common base exception and specific subclasses.
+4. Which additional pytest tests should be added.
+
+Keep the implementation minimal and consistent with the existing architecture.
+
+Do not modify any Python code or tests yet. Present your proposed design for my review first.
+
+Update PROMPT_LOG.md to record this prompt and your proposed approach, without claiming any implementation or tests have been completed, pls segregate this into a new section under STRETCH GOAL PROMPTS.
+```
+
+### Initial proposed design (summary)
+
+Proposed adding validation to `emi()`, `remaining_tenure()`, `prepayment_savings()`, and `eligible_amount()` (the four functions taking raw numeric input directly from a caller). Proposed invalid-input list (non-positive principal, negative rate, non-positive tenure, non-positive instalment, out-of-range prepay_month, negative prepay_amount, non-positive income, negative existing_emis, out-of-range foir). Proposed exception hierarchy with `LoanCalculatorError(ValueError)` as base and six specific subclasses (`InvalidPrincipalError`, `InvalidRateError`, `InvalidTenureError`, `InvalidInstalmentError`, `InvalidPrepaymentError`, `InvalidIncomeError`). No code was written at this stage.
+
+### Follow-up: design review feedback
+
+**Prompt:**
+```
+Include basic type validation, especially for numeric inputs and integer-only month/tenure parameters. Reject invalid types using the appropriate custom exceptions.
+
+Review the existing tests and implementation of remaining_tenure() before deciding whether negative balances should be rejected. Preserve zero-balance behaviour.
+
+Ensure prepayment amounts exceeding the outstanding balance retain the existing intended behaviour. Do not introduce validation that breaks this edge case.
+
+Keep the proposed LoanCalculatorError(ValueError) hierarchy and the rest of the design.
+
+Update PROMPT_LOG.md with this review feedback and the revised proposal. Do not implement code changes yet. Show me the revised design for approval.
+```
+
+**Revised design (summary):** Reviewed `test_remaining_tenure_negative_balance` and `test_prepayment_larger_than_outstanding_balance` — confirmed both are intentional existing behaviors that must NOT raise. Added type validation (reject `str`, `None`, `bool`) to all four target functions, with whole-number floats (e.g. `12.0`) initially proposed to be *accepted* for integer-like parameters (`tenure_months`, `prepay_month`), to "stay practical rather than overly strict." Exception hierarchy kept unchanged. No code written yet.
+
+### Approval and implementation instructions
+
+**Prompt:**
+```
+Approve - update PROMPT_LOG.md with this revised proposal: approve the revised stretch-goal design, with one additional requirement: reject NaN and positive/negative infinity for numeric inputs using the appropriate custom exceptions.
+
+Proceed with implementation:
+
+Create loan_calc/exceptions.py with the approved custom exception hierarchy.
+
+Add input validation to the agreed functions.
+
+Preserve existing behaviour for negative balances in remaining_tenure() and prepayments exceeding the outstanding balance.
+
+Add pytest tests for invalid values, invalid types, exception inheritance, and existing behaviour.
+
+Update relevant docstrings and type hints where necessary.
+
+Run the complete pytest suite with coverage.
+
+Do not modify existing tests merely to accommodate implementation mistakes. Investigate any failures and explain the cause.
+
+Update PROMPT_LOG.md with this prompt, implementation details, test results, and any mistakes or corrections.
+
+Do not create a Git commit yet. Show me the changes and test results for review first.
+```
+
+### Implementation
+
+1. **Created `loan_calc/exceptions.py`** with `LoanCalculatorError(ValueError)` as the base class and six subclasses: `InvalidPrincipalError`, `InvalidRateError`, `InvalidTenureError`, `InvalidInstalmentError`, `InvalidPrepaymentError`, `InvalidIncomeError`.
+2. **Updated `loan_calc/__init__.py`** to re-export all seven exception classes alongside the existing `calculator` exports.
+3. **Added validation helpers to `calculator.py`**: `_is_number()`, `_is_finite_number()` (rejects NaN/infinity, per the approved requirement), and (initially) `_is_integer_like()`.
+4. **Added validation to `emi()`**: `InvalidPrincipalError` for non-finite/non-positive principal; `InvalidRateError` for non-finite/negative rate; `InvalidTenureError` for non-integer/non-positive tenure.
+5. **Added validation to `remaining_tenure()`**: `InvalidInstalmentError` for non-finite/non-positive instalment (and for the pre-existing "too small" case, now upgraded from plain `ValueError`); `InvalidRateError` for negative rate. Preserved the negative/zero-balance-returns-0 behavior exactly, with only a type check (not a sign check) applied to `balance`.
+6. **Added validation to `prepayment_savings()`**: `InvalidPrepaymentError` for out-of-range `prepay_month` or negative `prepay_amount`. Preserved the "prepay_amount exceeds balance" behavior exactly — only amounts `< 0` are rejected.
+7. **Added validation to `eligible_amount()`**: `InvalidIncomeError` for non-positive income, negative existing EMIs, or out-of-range FOIR; `InvalidRateError`/`InvalidTenureError` reused for rate/tenure checks.
+8. **Created `tests/test_exceptions.py`** with `TestExceptionHierarchy`, `TestEmiValidation`, `TestRemainingTenureValidation`, `TestPrepaymentSavingsValidation`, and `TestEligibleAmountValidation` classes, covering bad values, bad types, NaN/infinity, exception inheritance, and explicit regression tests for the two preserved behaviors.
+
+### AI mistake discovered during test run #1
+
+Running the full suite after the initial implementation produced **1 failure**:
+
+```
+tests/test_exceptions.py::TestPrepaymentSavingsValidation::test_whole_number_float_prepay_month_is_accepted FAILED
+TypeError: list indices must be integers or slices, not float
+```
+
+**Root cause:** The initial `_is_integer_like()` helper was designed to *accept* whole-number floats (e.g. `12.0`) for `tenure_months` and `prepay_month`, based on my own design decision during the revision phase ("to stay practical rather than overly strict" — not something the user explicitly requested). However, these same validated values are later used directly in `range()` (in `amortisation_schedule()`) and in list indexing (`sched[prepay_month - 1]` in `prepayment_savings()`, `sched[months_paid - 1]` in `outstanding_after()`) — both of which require a strict Python `int`, not a `float`, even a whole-number one. This created an inconsistency between what validation accepted and what the code could actually handle, causing an uncaught `TypeError` instead of either succeeding cleanly or raising the intended custom exception.
+
+**Investigation:** Confirmed via direct testing that `amortisation_schedule(100_000, 9, 12.0)` and `outstanding_after(100_000, 9, 24, 5.0)` both raised the same class of `TypeError` for the same underlying reason. `eligible_amount()` was unaffected, since its `tenure_months` is only used in exponentiation (`(1+r)**tenure_months`), which works fine with floats.
+
+**User decision:** Rather than patching around the symptom (normalizing to `int` after validation at each call site), the user chose to fix the root cause: **require a strict `int` type for `tenure_months`/`prepay_month`, rejecting ALL floats — even whole-number ones like `12.0`.**
+
+### Correction applied
+
+1. Renamed `_is_integer_like()` to **`_is_strict_int()`** in `calculator.py`, changing its logic to reject any `float` (including whole-number floats), accepting only true `int` (and still rejecting `bool`).
+2. Updated all three call sites (`emi()`'s `tenure_months` check, `prepayment_savings()`'s `prepay_month` check, `eligible_amount()`'s `tenure_months` check) to use `_is_strict_int()` instead.
+3. Updated `tests/test_exceptions.py`: the two tests that previously asserted whole-number floats were *accepted* (`test_whole_number_float_tenure_is_accepted`, `test_whole_number_float_prepay_month_is_accepted`) were rewritten to assert the **opposite** — that whole-number floats now correctly raise `InvalidTenureError`/`InvalidPrepaymentError` respectively. This was not "modifying a test to accommodate an implementation mistake" — it was correcting the test to match the newly-corrected, intentionally stricter design decision made by the user.
+
+### Final pytest results (after correction)
+
+```
+python -m pytest tests/ --no-header -q
+132 passed in 0.28s
+```
+
+```
+python -m pytest --cov=loan_calc --cov=cli --cov-report=term-missing --no-header -q
+Name                      Stmts   Miss  Cover   Missing
+-------------------------------------------------------
+cli.py                       20      1    95%   39
+loan_calc\__init__.py         2      0   100%
+loan_calc\calculator.py     141      0   100%
+loan_calc\exceptions.py      14      0   100%
+-------------------------------------------------------
+TOTAL                       177      1    99%
+132 passed in 0.82s
+```
+
+**132 tests passed (71 new tests added for the stretch goal, on top of the original 61), 99% total coverage**, with `calculator.py` and `exceptions.py` both at 100%. The single uncovered line remains `cli.py` line 39 (the `if __name__ == "__main__":` guard, as previously documented).
+
+Docstrings and type hints on `emi()`, `remaining_tenure()`, `prepayment_savings()`, and `eligible_amount()` were updated with `Raises:` sections documenting the new custom exceptions, and `Note:` sections explicitly documenting the two preserved behaviors (negative balance, prepayment exceeding balance).
+
+No Git commit was made — changes and test results are presented here for review first, as requested.
+
+---
+
+## Stretch Entry 2 — 2026-10-26 (Code Review Fixes)
+
+### Prompt
+
+```
+Before the final Git commit, a code review identified several issues:
+
+1. prepayment_savings() produces a hugely negative interest_saved value when prepay_amount exceeds the outstanding balance, because it includes the entire excessive amount in the financial calculation. Investigate and correct this while preserving the intended behaviour of treating the loan as fully repaid.
+
+2. A zero prepayment can produce negative months_saved and interest_saved. Investigate the rounding and remaining-tenure calculations, and correct this so zero prepayment represents no savings.
+
+3. outstanding_after() does not validate months_paid as a strict integer, resulting in raw TypeErrors for floats and other invalid types. Add consistent validation and regression tests.
+
+4. Update README.md, which incorrectly claims the project has no tests or documentation.
+
+5. Correct the outdated monthly-rate rounding comment in tests/test_calculator.py and ensure the coverage command in PROMPT_LOG.md matches the actual command used.
+
+Keep the fixes minimal. Add tests that verify the actual financial results, not merely that the functions return successfully.
+
+Update PROMPT_LOG.md with this review, changes, and test results.
+
+Do not commit or push. Show me the proposed changes and full pytest coverage results for final review.
+```
+
+### Investigation and fixes
+
+**Issue 1 — `prepayment_savings()` deeply negative `interest_saved` when `prepay_amount` exceeds the balance.**
+
+Root cause: `new_total = instalment * prepay_month + prepay_amount + instalment * months_left` used the *entire* `prepay_amount`, even the portion exceeding the actual outstanding balance. Reproduced: with `principal=100_000, rate=9, tenure=24, prepay_month=6`, prepaying `outstanding_balance + 1_000_000` produced `interest_saved = -994422.82`.
+
+Fix: cap the amount used in the financial calculation to the actual outstanding balance — `effective_prepay_amount = min(prepay_amount, balance)` — since any excess beyond the balance is never actually "spent" on the loan. Re-tested the same scenario: `interest_saved` is now a sensible `5577.18`.
+
+**Issue 2 — zero prepayment producing negative `months_saved`/`interest_saved`.**
+
+Root cause: `remaining_tenure()`'s logarithmic formula (`n = -log(1 - balance*r/instalment) / log(1+r)`) produces tiny floating-point noise for values that are mathematically whole numbers (e.g. computing `18.000047907513988` instead of exactly `18.0`). `math.ceil()` on that noisy value rounds up to `19` instead of `18`, making the post-prepayment schedule appear one month longer than the original even when `prepay_amount=0`.
+
+Investigated several precisions: rounding `n` to 4 decimal places (`round(n, 4)`) before `math.ceil()` correctly absorbs the observed noise (which was on the order of `1e-5` to `1e-7`) across all reproduction cases, while still preserving genuinely fractional results (verified `5.0001` still correctly ceils to `6`). Rounding to 6 decimal places was tried first but was insufficient for two of the seven reproduction cases; 4 decimal places fixed all of them.
+
+Fix applied to `remaining_tenure()`: `return math.ceil(round(n, 4))`.
+
+**Issue 3 — `outstanding_after()` missing `months_paid` type validation.**
+
+Confirmed via direct testing that `outstanding_after(100_000, 9, 24, 5.0)` raised a raw `TypeError: list indices must be integers or slices, not float`, since `months_paid` was never validated for type despite being used for list indexing (the same class of bug fixed for `tenure_months`/`prepay_month` during the original stretch-goal implementation, but missed for this function since it was not one of the four originally agreed-upon validation targets).
+
+Fix: added `if not _is_strict_int(months_paid): raise InvalidTenureError(...)` at the top of `outstanding_after()`, reusing the existing `_is_strict_int()` helper and `InvalidTenureError` exception class (since `months_paid` is semantically a month-count, same as `tenure_months`). All existing value-based behaviors (`<=0` returns principal, `>len(sched)` returns `0.0`) preserved exactly.
+
+**Issue 4 — outdated `README.md`.**
+
+`README.md` previously stated "It has no tests and no documentation. Users report that some numbers are wrong." This was rewritten to accurately describe the completed state of the project: documentation (`ARCHITECTURE.md`), the pytest suite (`tests/`), the three fixed calculation bugs, and the custom exception/validation hierarchy, with a pointer to `PROMPT_LOG.md` for full history. The "Run tests (once you have written them)" section (implying tests didn't exist yet) was also corrected, and the documented `pytest` command was updated to include `--cov=cli` (matching the actual command used and recorded in Entry 9), since the original only covered `--cov=loan_calc`.
+
+**Issue 5 — outdated comment in `tests/test_calculator.py` + PROMPT_LOG command mismatch.**
+
+The comment on `test_emi_monthly_rate_rounding_with_9_5_percent` still said `_monthly_rate() rounds this to 0.0079` — true of the *original buggy* implementation, but no longer true after the Bug #3 fix in Entry 8 (which removed the premature rounding entirely). Updated the comment to explain that `_monthly_rate()` no longer rounds, and that the test's independently-computed "precise_rate" now matches the calculator's actual internal rate exactly. Re-checked Entry 9's documented coverage command (`pytest --cov=loan_calc --cov=cli --cov-report=term-missing`) against what was actually run — these already matched; no change was needed there.
+
+### New tests added
+
+Added to `tests/test_exceptions.py`:
+- `TestOutstandingAfterValidation` — regression tests confirming existing valid-int/zero/negative/exceeds-schedule behaviors are unchanged, plus new tests confirming `float`, `string`, `None`, and `bool` values for `months_paid` now raise `InvalidTenureError` (previously a raw `TypeError` for floats).
+- `TestPrepaymentExceedingBalanceFinancials` — verifies `interest_saved` is positive (not deeply negative) when `prepay_amount` exceeds the balance, and that prepaying exactly the balance produces the same financial result as "overpaying" by any larger amount.
+- `TestZeroPrepaymentFinancials` — parametrized across 7 different principal/rate/tenure/prepay_month combinations, verifying a zero prepayment never produces negative `months_saved` or `interest_saved`.
+
+**AI mistake during test authoring (not a product bug):** The first version of `test_zero_prepayment_is_never_worse_than_no_prepayment` used `assert result["interest_saved"] >= pytest.approx(0, abs=0.01)`, which raised `TypeError: '>=' not supported between instances of 'float' and 'ApproxScalar'` — `pytest.approx()` does not support the `>=` operator. This was a mistake in how I wrote the test itself, not an implementation issue being papered over. Corrected to `assert result["interest_saved"] >= -0.01`, using a direct tolerance comparison instead of `pytest.approx()`.
+
+### Final pytest results
+
+```
+python -m pytest --cov=loan_calc --cov=cli --cov-report=term-missing --no-header -q
+
+Name                      Stmts   Miss  Cover   Missing
+-------------------------------------------------------
+cli.py                       20      1    95%   39
+loan_calc\__init__.py         2      0   100%
+loan_calc\calculator.py     144      0   100%
+loan_calc\exceptions.py      14      0   100%
+-------------------------------------------------------
+TOTAL                       180      1    99%
+150 passed in 0.83s
+```
+
+**150 tests passed (18 new tests added for the code review fixes, on top of the previous 132), 99% total coverage**, with `calculator.py` and `exceptions.py` both at 100%. `cli.py`'s single uncovered line remains the `if __name__ == "__main__":` guard, as previously documented.
+
+No Git commit or push was made — changes and test results are presented here for final review, as requested.
+
+---
+
 ## Entry 9 — 2026-10-26
 
 ### Prompt

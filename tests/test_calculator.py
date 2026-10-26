@@ -50,10 +50,13 @@ class TestEmi:
         assert result == pytest.approx(expected, abs=0.01)
 
     def test_emi_monthly_rate_rounding_with_9_5_percent(self):
-        # 9.5% / 1200 = 0.00791666...; _monthly_rate() rounds this to
-        # 0.0079 (4 decimal places). This test uses the precise unrounded
-        # rate to check whether that rounding introduces a measurable
-        # discrepancy in the resulting EMI.
+        # 9.5% / 1200 = 0.00791666...; _monthly_rate() no longer rounds
+        # this to 0.0079 (4 decimal places) - that premature-rounding
+        # bug was fixed (see PROMPT_LOG.md Entry 8). _monthly_rate() now
+        # returns the full-precision rate, so this test's independently
+        # computed "precise_rate" below matches the calculator's actual
+        # internal rate exactly, confirming no rounding discrepancy
+        # remains for rates that don't divide evenly at 4 decimals.
         principal, annual_rate, tenure_months = 500_000, 9.5, 120
         precise_rate = annual_rate / 1200
         f = (1 + precise_rate) ** tenure_months
