@@ -314,3 +314,58 @@ All three bugs are now fixed:
 No remaining failures. No other calculator functions, CLI logic, or test files were modified. No git commit was made — the user will handle committing separately.
 
 ---
+
+## Entry 9 — 2026-10-26
+
+### Prompt
+
+```
+we've completed the final test coverage check using pytest-cov in PowerShell.
+
+the results were 61 tests passed, 99% total line coverage, with calculator.py at 100%, __init__.py at 100%, and cli.py at 95%. only line 39 in cli.py was uncovered.
+
+add this as a new entry in PROMPT_LOG.md, including the command used, the actual coverage results and confirmation that we've exceeded the required 85% coverage.
+
+dont modify any Python code or tests, and dont rerun anything. show me the proposed log entry before applying it.
+```
+
+### Coverage check results
+
+Command used (run by the user in PowerShell):
+
+```powershell
+pytest --cov=loan_calc --cov=cli --cov-report=term-missing
+```
+
+**Result: 61 tests passed.**
+
+| Module | Coverage |
+|---|---:|
+| `loan_calc/calculator.py` | 100% |
+| `loan_calc/__init__.py` | 100% |
+| `cli.py` | 95% |
+| **Total** | **99%** |
+
+The only uncovered line is **line 39 of `cli.py`** — the `main()` call
+inside the `if __name__ == "__main__":` guard. This line only executes
+when `cli.py` is run directly as a script (`python cli.py ...`), not
+when it is imported as a module by pytest, which is how
+`tests/test_cli.py` exercises `main()` (via direct function calls with
+mocked `sys.argv`). This is expected and standard — the
+`if __name__ == "__main__":` guard is a common Python idiom that is
+conventionally excluded from coverage expectations, since it has no
+logic of its own to test (it only serves as the script's entry point
+trigger).
+
+### Confirmation
+
+**99% total line coverage exceeds the required 85% coverage
+threshold**, with `loan_calc/calculator.py` (all business logic,
+including the 3 fixed bugs) and `loan_calc/__init__.py` both at 100%
+coverage. `cli.py` is effectively fully covered except for the
+unreachable-in-tests script-entry-point line.
+
+No Python code or tests were modified, and the test suite was not
+re-run — this entry only records the coverage results already obtained.
+
+---
