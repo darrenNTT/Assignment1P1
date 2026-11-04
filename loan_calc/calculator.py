@@ -283,24 +283,47 @@ def prepayment_savings(
     instalment = emi(principal, annual_rate, tenure_months)
     sched = amortisation_schedule(principal, annual_rate, tenure_months)
     balance = sched[prepay_month - 1]["balance"]
-    new_balance = balance - prepay_amount
-    if new_balance <= 0:
-        months_left = 0
-    else:
-        months_left = remaining_tenure(new_balance, annual_rate, instalment)
-    original_left = tenure_months - prepay_month
-    interest_paid_so_far = sum(row["interest"] for row in sched[:prepay_month])
-    original_interest = total_interest(principal, annual_rate, tenure_months)
     # Cap the amount used in the financial calculation to the actual
     # outstanding balance: any portion of prepay_amount exceeding the
     # balance is not actually "spent" on the loan (there is nothing left
-    # to prepay), so including it in new_total would overstate the total
-    # amount paid and produce a nonsensical, deeply negative
-    # interest_saved. The loan is simply fully repaid at prepay_month in
+    # to prepay). The loan is simply fully repaid at prepay_month in
     # that case.
     effective_prepay_amount = min(prepay_amount, balance)
-    new_total = instalment * prepay_month + effective_prepay_amount + instalment * months_left
-    new_interest = new_total - principal
+    new_balance = balance - effective_prepay_amount
+
+    original_left = tenure_months - prepay_month
+    interest_paid_so_far = sum(row["interest"] for row in sched[:prepay_month])
+    # Compute original_interest as the sum of the original schedule's
+    # interest rows (rather than via total_interest()'s separate
+    # formula-based calculation) so that a zero-amount prepayment
+    # produces an exact 0.0 interest_saved, with no cross-method
+    # rounding discrepancy between the two calculations.
+    original_interest = sum(row["interest"] for row in sched)
+
+    if new_balance <= 0:
+        months_left = 0
+        remaining_interest = 0.0
+    else:
+        months_left = remaining_tenure(new_balance, annual_rate, instalment)
+        # Simulate the actual remaining repayment schedule month-by-month
+        # (mirroring amortisation_schedule()'s final-payment logic) to
+        # correctly account for the smaller final instalment, instead of
+        # assuming every remaining month is a full EMI. The final month's
+        # principal portion is set to exactly clear the balance, just as
+        # amortisation_schedule() does.
+        r = annual_rate / 1200
+        remaining_interest = 0.0
+        remaining_balance = new_balance
+        for m in range(1, months_left + 1):
+            month_interest = round(remaining_balance * r, 2)
+            if m == months_left:
+                principal_part = round(remaining_balance, 2)
+            else:
+                principal_part = round(instalment - month_interest, 2)
+            remaining_balance = round(remaining_balance - principal_part, 2)
+            remaining_interest += month_interest
+
+    new_interest = interest_paid_so_far + remaining_interest
     return {
         "emi": instalment,
         "months_saved": original_left - months_left,

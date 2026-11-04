@@ -589,3 +589,222 @@ No Python code or tests were modified, and the test suite was not
 re-run — this entry only records the coverage results already obtained.
 
 ---
+
+## Entry 10 — 2026-11-04 (CLI Smoke-Test Bug Fix)
+
+### Prompt
+
+```
+During final CLI smoke testing of Assignment P1, we discovered a calculation bug in `prepayment_savings()` that was not caught by our existing 150 pytest tests.
+
+**Reproduction command:**
+
+`python cli.py 100000 9 24 --prepay-month 6 --prepay-amount 20000`
+
+**Actual results:**
+- EMI: 4568.47
+- Outstanding balance after month 6: 76655.28
+- Outstanding balance after prepayment: 56655.28
+- Remaining months: 14
+- New tenure: 20 months
+- Interest saved: -1726.12
+
+The negative interest savings appear incorrect because the loan is repaid earlier without any prepayment penalties.
+
+**Suspected cause:**
+
+In `prepayment_savings()`, the following calculation assumes every remaining instalment is a full EMI:
+
+```python
+new_total = instalment * prepay_month + effective_prepay_amount + instalment * months_left
+```
+
+However, the final instalment may be smaller than the regular EMI.
+
+**Your tasks:**
+
+1. Inspect `prepayment_savings()`, `remaining_tenure()`, and `amortisation_schedule()` to independently verify the root cause. Do not assume the suspected explanation is necessarily complete.
+2. Recalculate this scenario independently, including the actual final repayment amount, total interest paid after prepayment, and interest saved.
+3. Propose the smallest appropriate code correction while preserving the existing function signature, return dictionary structure, and intended behaviour.
+4. Check whether the proposed fix also handles zero-interest loans, zero prepayment, and prepayments exceeding the outstanding balance.
+5. Propose regression tests covering the reproduced bug and relevant edge cases. Tests must independently verify the expected financial calculations rather than merely asserting positive savings.
+6. Do not modify existing tests simply to accommodate incorrect implementation behaviour.
+7. Update `PROMPT_LOG.md` with this exact prompt, the issue discovered during manual CLI smoke testing, the investigation findings, and the proposed correction. Clearly state that the fix has not yet been implemented.
+
+**Important:** Do not modify any Python source code or test files yet. Do not commit or push anything.
+
+Show me the root cause, independently calculated expected results, proposed code changes, and proposed regression tests for review before implementation.
+```
+
+### Investigation (confirmed, more complete than the suspected explanation)
+
+The bug has **two compounding causes** in `prepayment_savings()`:
+
+**Cause A (as suspected):** `new_total = instalment * prepay_month + effective_prepay_amount + instalment * months_left` assumed every one of the `months_left` remaining payments was a **full EMI**. In reality, the final instalment in any amortising loan is smaller (it is sized to exactly zero out the remaining balance, following `amortisation_schedule()`'s own final-payment logic). Treating it as a full EMI overstated the total amount paid post-prepayment, which understated `interest_saved`.
+
+**Cause B (found during independent verification, not in the original suspicion):** The existing code called `months_left = remaining_tenure(new_balance, annual_rate, instalment)` but never used `remaining_tenure()`'s underlying month-by-month interest breakdown — it only used the month *count*, then reconstructed `new_total` using the flawed flat-EMI formula. There was no code path that correctly accumulated the actual interest paid during the post-prepayment period.
+
+For the reported scenario (100000, 9%, 24mo, prepay month 6, prepay 20000):
+- Buggy `interest_saved`: **-1726.12**
+- Correct `interest_saved` (independently verified): **2543.06**
+
+### Independent Recalculation
+
+| Metric | Value |
+|---|---|
+| EMI | 4568.47 |
+| Balance after month 6 | 76655.28 |
+| Balance after ₹20,000 prepayment | 56655.28 |
+| Remaining months (`remaining_tenure`) | 14 |
+| Final (14th) repayment amount | 299.38 (not a full EMI) |
+| Interest paid before prepayment (months 1–6) | 4066.10 |
+| Interest paid during remaining 14 months (simulated) | 3034.21 |
+| Total interest after prepayment | 7100.37 |
+| Original total interest (schedule-row-sum, no prepayment) | 9643.43 |
+| **Correct `interest_saved`** | **2543.06** |
+| `months_saved` | 4 (unchanged) |
+| `new_tenure` | 20 (unchanged) |
+
+### Follow-up: review feedback and implementation approval
+
+**Prompt:**
+```
+I approve the proposed `prepayment_savings()` fix with two adjustments:
+
+1. Ensure `prepay_amount=0` produces exactly zero interest savings and zero months saved, without rounding artifacts.
+2. Strengthen or remove the redundant regression test that only checks `interest_saved > 0`. Keep the exact-value test for the reported bug.
+
+Implement the fix and regression tests. Preserve existing function signatures, return values, and exception behaviour.
+
+Run the full pytest suite with coverage and report the results. Update `PROMPT_LOG.md` with the investigation, implementation, and test results.
+
+Do not commit or push anything yet. Return a concise plain-text summary.
+```
+
+### Adjustment investigated before implementation
+
+The first version of the proposed fix (shown for review) computed `original_interest` via the existing `total_interest()` formula, while the new post-prepayment interest was computed by summing simulated schedule rows. These two methods round independently and diverge by a few cents (confirmed: `total_interest(500000, 9, 60) = 122750.80` vs. summing `amortisation_schedule()`'s own interest rows = `122750.59`, a `0.21` discrepancy). This caused a zero-amount prepayment to show a tiny non-zero `interest_saved` (`0.21`) instead of exactly `0.0`.
+
+**Fix for this:** `original_interest` is now computed the same way as the post-prepayment interest — by summing the *original* schedule's interest rows (`sum(row["interest"] for row in sched)`) — rather than via `total_interest()`'s separately-rounded formula. This guarantees a zero-amount prepayment produces an exact `0.0`, since both the "before" and "after" calculations now use the identical schedule-row-sum method.
+
+### Implementation applied
+
+**File:** `loan_calc/calculator.py`, `prepayment_savings()`.
+
+Removed the flawed `new_total = instalment * prepay_month + effective_prepay_amount + instalment * months_left` formula. Replaced with:
+1. `original_interest` computed as `sum(row["interest"] for row in sched)` (the full original schedule's interest sum), instead of `total_interest(...)`.
+2. An explicit month-by-month simulation loop for the post-prepayment period, mirroring `amortisation_schedule()`'s own final-payment logic (the last month's principal portion is set to exactly clear the remaining balance), correctly accumulating `remaining_interest` instead of assuming flat EMIs.
+3. `new_interest = interest_paid_so_far + remaining_interest`, replacing the old `new_total - principal` calculation.
+
+Function signature, return dict structure (`emi`, `months_saved`, `new_tenure`, `interest_saved`, `interest_paid_before_prepayment`), docstring, and all exception-raising behavior are unchanged.
+
+### Regression tests added
+
+New `TestPrepaymentSavingsFinancialAccuracy` class in `tests/test_calculator.py` (6 new tests, existing tests unmodified):
+- `test_reported_bug_scenario_matches_independent_calculation` — exact reproduction of the reported CLI bug, asserting `interest_saved == 2543.06` (not merely `> 0`).
+- `test_final_instalment_in_post_prepayment_schedule_is_smaller_than_emi` — directly verifies the root cause fix by independently reconstructing the post-prepayment schedule and confirming the final payment (`299.38`) is smaller than a full EMI.
+- `test_zero_prepayment_produces_exactly_zero_savings` — asserts `interest_saved == 0.0` and `months_saved == 0` **exactly** (per your first adjustment), for an interest-bearing loan.
+- `test_zero_prepayment_zero_interest_loan_produces_exactly_zero_savings` — same exact-zero assertion for a 0%-interest loan.
+- `test_prepayment_exceeding_balance_produces_correct_savings` — independently verified exact value (`5577.27`) for the "prepayment exceeds balance" edge case (previously only checked `>= 0`; per your second adjustment, the redundant loose assertion was replaced with this exact-value check).
+- `test_zero_interest_loan_prepayment_has_zero_interest_saved` — confirms a 0%-interest loan with a non-zero prepayment still correctly reports `interest_saved == 0.0`.
+
+The previous proposal's redundant `test_final_instalment_smaller_than_emi_is_correctly_accounted_for` (which only asserted `interest_saved > 0`) was replaced with the stronger `test_final_instalment_in_post_prepayment_schedule_is_smaller_than_emi`, which independently verifies the actual final payment amount rather than a loose inequality, per your feedback.
+
+### Final pytest results
+
+```
+python cli.py 100000 9 24 --prepay-month 6 --prepay-amount 20000
+{
+  "emi": 4568.47,
+  "months_saved": 4,
+  "new_tenure": 20,
+  "interest_saved": 2543.06,
+  "interest_paid_before_prepayment": 4066.1
+}
+```
+
+```
+python -m pytest --cov=loan_calc --cov=cli --cov-report=term-missing --no-header -q
+
+Name                      Stmts   Miss  Cover   Missing
+-------------------------------------------------------
+cli.py                       20      1    95%   39
+loan_calc\__init__.py         2      0   100%
+loan_calc\calculator.py     154      0   100%
+loan_calc\exceptions.py      14      0   100%
+-------------------------------------------------------
+TOTAL                       190      1    99%
+156 passed in 0.63s
+```
+
+**156 tests passed (6 new tests added for this bug fix, on top of the previous 150), 99% total coverage**, with `calculator.py` and `exceptions.py` both at 100%. `cli.py`'s single uncovered line remains the `if __name__ == "__main__":` guard, as previously documented. No existing tests were modified.
+
+No Git commit or push was made — all changes are documented here for review.
+
+---
+
+## Entry 11 — 2026-11-04 (CLI Smoke-Test Bug Fix: `--prepay-amount 0`)
+
+### Prompt
+
+```
+Manual CLI smoke testing identified a bug where `--prepay-amount 0` skipped the prepayment output.
+
+I fixed `cli.py` by changing the condition to:
+`if a.prepay_month is not None and a.prepay_amount is not None:`
+
+Please add a regression test in `tests/test_cli.py` verifying that a zero prepayment produces the second JSON output with `interest_saved=0.0`, `months_saved=0`, and unchanged tenure.
+
+Update `PROMPT_LOG.md` to document this bug and fix. Run the full pytest suite with coverage.
+
+Do not modify calculator logic, commit, or push. Return a concise plain-text summary.
+```
+
+### Bug and fix (already applied by the user to `cli.py` before this prompt)
+
+**Root cause:** `main()` originally checked `if a.prepay_month and a.prepay_amount:` — a truthy check. In Python, `0` is falsy, so passing `--prepay-amount 0` (a legitimate, explicit value meaning "no prepayment made") caused the entire prepayment JSON block to be silently skipped, even though `--prepay-month` was supplied. This made it impossible to use the CLI to confirm "zero prepayment = zero savings" behavior, which was the subject of the calculator-level fix in Entry 10.
+
+**Fix (user-applied):** Changed the condition to `if a.prepay_month is not None and a.prepay_amount is not None:`, which correctly distinguishes "argument omitted" (`None`, from `argparse`'s default when a flag isn't passed) from "argument explicitly set to zero" (`0`).
+
+**Verified via CLI:**
+```
+python cli.py 500000 9 60 --prepay-month 12 --prepay-amount 0
+```
+now correctly prints the second JSON block:
+```json
+{
+  "emi": 10379.18,
+  "months_saved": 0,
+  "new_tenure": 60,
+  "interest_saved": 0.0,
+  "interest_paid_before_prepayment": 41635.13
+}
+```
+
+### Regression test added
+
+Added `test_main_with_zero_prepay_amount_still_prints_prepayment_output` to the `TestMainPrepaymentArgs` class in `tests/test_cli.py`. It invokes `main()` with `--prepay-month 12 --prepay-amount 0`, parses the second (prepayment) JSON block from stdout independently of the first (summary) block, and asserts the exact expected values: `interest_saved == 0.0`, `months_saved == 0`, `new_tenure == 60` (unchanged from the original 60-month tenure). The existing `test_main_without_both_prepay_args_skips_prepayment_output` test's comment was also updated to reflect the corrected `is not None` condition (it was previously describing the old, buggy truthy check) — this is a comment-only correction, not a change to any assertion or test behavior.
+
+No calculator logic (`loan_calc/calculator.py`) was modified in this entry.
+
+### Final pytest results
+
+```
+python -m pytest --cov=loan_calc --cov=cli --cov-report=term-missing --no-header -q
+
+Name                      Stmts   Miss  Cover   Missing
+-------------------------------------------------------
+cli.py                       20      1    95%   39
+loan_calc\__init__.py         2      0   100%
+loan_calc\calculator.py     154      0   100%
+loan_calc\exceptions.py      14      0   100%
+-------------------------------------------------------
+TOTAL                       190      1    99%
+157 passed in 0.69s
+```
+
+**157 tests passed (1 new test added for this CLI fix, on top of the previous 156), 99% total coverage maintained**, with `calculator.py` and `exceptions.py` both at 100%. `cli.py`'s single uncovered line remains the `if __name__ == "__main__":` guard, as previously documented.
+
+No Git commit or push was made — all changes are documented here for review.
+
+---

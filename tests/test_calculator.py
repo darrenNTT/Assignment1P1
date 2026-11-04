@@ -424,6 +424,97 @@ class TestSummary:
 
 
 # ---------------------------------------------------------------------------
+# prepayment_savings() financial accuracy (CLI smoke-test bug fix)
+#
+# A bug was discovered via manual CLI smoke testing:
+#   python cli.py 100000 9 24 --prepay-month 6 --prepay-amount 20000
+# produced interest_saved = -1726.12, which is impossible for a
+# legitimate early prepayment with no penalty. Root cause:
+# prepayment_savings() assumed every remaining post-prepayment month was
+# a full EMI, when in fact the final instalment in any amortising loan
+# is smaller (sized to exactly clear the remaining balance). See
+# PROMPT_LOG.md for the full investigation and independently-verified
+# expected values.
+# ---------------------------------------------------------------------------
+
+class TestPrepaymentSavingsFinancialAccuracy:
+    def test_reported_bug_scenario_matches_independent_calculation(self):
+        # Exact reproduction of the bug reported via CLI smoke testing.
+        # Expected values independently verified via month-by-month
+        # simulation against amortisation_schedule()'s own final-payment
+        # logic (see PROMPT_LOG.md for the full derivation).
+        result = prepayment_savings(100_000, 9, 24, 6, 20_000)
+        assert result["interest_saved"] == pytest.approx(2543.06, abs=0.01)
+        assert result["months_saved"] == 4
+        assert result["new_tenure"] == 20
+        assert result["interest_paid_before_prepayment"] == pytest.approx(4066.10, abs=0.01)
+
+    def test_final_instalment_in_post_prepayment_schedule_is_smaller_than_emi(self):
+        # Directly verifies the root cause fix by independently
+        # reconstructing the post-prepayment schedule and confirming its
+        # final payment is NOT a full EMI. balance=56655.28 (after the
+        # 20,000 prepayment), instalment=4568.47, 9% annual -> remaining
+        # tenure is 14 months, and the 14th (final) payment should be
+        # ~299.38, not a full 4568.47.
+        principal, rate, tenure, prepay_month, prepay_amount = 100_000, 9, 24, 6, 20_000
+        instalment = emi(principal, rate, tenure)
+        sched = amortisation_schedule(principal, rate, tenure)
+        balance_after_prepay = sched[prepay_month - 1]["balance"] - prepay_amount
+        months_left = remaining_tenure(balance_after_prepay, rate, instalment)
+
+        # Reconstruct the final month's payment independently.
+        r = rate / 1200
+        bal = balance_after_prepay
+        for m in range(1, months_left + 1):
+            interest = round(bal * r, 2)
+            if m == months_left:
+                principal_part = round(bal, 2)
+                final_payment = round(principal_part + interest, 2)
+            else:
+                principal_part = round(instalment - interest, 2)
+            bal = round(bal - principal_part, 2)
+
+        assert final_payment == pytest.approx(299.38, abs=0.01)
+        assert final_payment < instalment
+
+    def test_zero_prepayment_produces_exactly_zero_savings(self):
+        # A zero-amount prepayment is a financial no-op: it must produce
+        # EXACTLY zero interest_saved and zero months_saved (not merely
+        # "close to zero"), since original_interest and new_interest are
+        # now computed via the same schedule-row-sum method, eliminating
+        # any cross-method rounding discrepancy.
+        result = prepayment_savings(500_000, 9, 60, 12, 0)
+        assert result["interest_saved"] == 0.0
+        assert result["months_saved"] == 0
+        assert result["new_tenure"] == 60
+
+    def test_zero_prepayment_zero_interest_loan_produces_exactly_zero_savings(self):
+        result = prepayment_savings(120_000, 0, 24, 6, 0)
+        assert result["interest_saved"] == 0.0
+        assert result["months_saved"] == 0
+        assert result["new_tenure"] == 24
+
+    def test_prepayment_exceeding_balance_produces_correct_savings(self):
+        # Independently verified expected value: the loan is fully
+        # repaid exactly at prepay_month, and interest_saved reflects
+        # only the interest actually avoided on the true outstanding
+        # balance (not the excess "overpayment" amount).
+        principal, rate, tenure, prepay_month = 100_000, 9, 24, 6
+        sched = amortisation_schedule(principal, rate, tenure)
+        balance_at_prepay = sched[prepay_month - 1]["balance"]
+        huge_prepay_amount = balance_at_prepay + 1_000_000
+        result = prepayment_savings(principal, rate, tenure, prepay_month, huge_prepay_amount)
+        assert result["new_tenure"] == prepay_month
+        assert result["interest_saved"] == pytest.approx(5577.27, abs=0.01)
+
+    def test_zero_interest_loan_prepayment_has_zero_interest_saved(self):
+        # With 0% interest, prepaying early can never "save interest"
+        # since none accrues - interest_saved must be exactly 0.
+        result = prepayment_savings(120_000, 0, 24, 6, 20_000)
+        assert result["interest_saved"] == pytest.approx(0.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
 # Sanity check: the loan_calc package is importable and the module's
 # functions are reachable, confirming pytest discovery/config is correct.
 # ---------------------------------------------------------------------------

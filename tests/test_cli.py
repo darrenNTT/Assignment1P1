@@ -63,8 +63,8 @@ class TestMainPrepaymentArgs:
 
     def test_main_without_both_prepay_args_skips_prepayment_output(self, monkeypatch, capsys):
         # Only --prepay-month supplied, --prepay-amount omitted -> prepayment
-        # block should NOT be printed (per the `if a.prepay_month and
-        # a.prepay_amount:` truthy check in main()).
+        # block should NOT be printed (per the `if a.prepay_month is not
+        # None and a.prepay_amount is not None:` check in main()).
         monkeypatch.setattr(
             "sys.argv",
             ["cli.py", "500000", "9", "60", "--prepay-month", "12"],
@@ -72,3 +72,33 @@ class TestMainPrepaymentArgs:
         main()
         captured = capsys.readouterr()
         assert "interest_saved" not in captured.out
+
+    def test_main_with_zero_prepay_amount_still_prints_prepayment_output(self, monkeypatch, capsys):
+        # Regression test for a CLI bug found during manual smoke testing:
+        # main() originally checked `if a.prepay_month and
+        # a.prepay_amount:`, a truthy check. Since 0 is falsy in Python,
+        # passing --prepay-amount 0 (a legitimate, explicit value meaning
+        # "no prepayment") caused the entire prepayment JSON block to be
+        # skipped, even though --prepay-month was supplied. This was
+        # fixed by changing the check to `is not None` comparisons, which
+        # correctly distinguish "argument omitted" (None) from "argument
+        # explicitly set to zero" (0). This test asserts the prepayment
+        # block IS printed for --prepay-amount 0, with the exact values
+        # expected for a zero-amount prepayment (see PROMPT_LOG.md).
+        monkeypatch.setattr(
+            "sys.argv",
+            ["cli.py", "500000", "9", "60", "--prepay-month", "12", "--prepay-amount", "0"],
+        )
+        main()
+        captured = capsys.readouterr()
+        lines = captured.out.strip().split("\n")
+        # The output is two JSON blocks printed back-to-back (summary,
+        # then prepayment savings). Split on the second block's opening
+        # brace to parse it independently.
+        full_output = captured.out
+        second_block_start = full_output.index("{", full_output.index("}") + 1)
+        prepayment_output = json.loads(full_output[second_block_start:])
+
+        assert prepayment_output["interest_saved"] == 0.0
+        assert prepayment_output["months_saved"] == 0
+        assert prepayment_output["new_tenure"] == 60

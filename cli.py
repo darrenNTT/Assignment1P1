@@ -31,7 +31,7 @@ def main() -> None:
     if a.schedule:
         for row in amortisation_schedule(a.principal, a.rate, a.tenure):
             print(row)
-    if a.prepay_month and a.prepay_amount:
+    if a.prepay_month is not None and a.prepay_amount is not None:
         print(json.dumps(prepayment_savings(a.principal, a.rate, a.tenure, a.prepay_month, a.prepay_amount), indent=2))
 
 
